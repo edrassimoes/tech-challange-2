@@ -1,0 +1,131 @@
+services:
+  auth-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: auth
+      POSTGRES_USER: toggle
+      POSTGRES_PASSWORD: toggle
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
+      - ./auth-service-main/db/init.sql:/docker-entrypoint-initdb.d/01-auth.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U toggle -d auth"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app-db:
+    image: postgres:13-alpine
+    environment:
+      POSTGRES_DB: togglemaster
+      POSTGRES_USER: toggle
+      POSTGRES_PASSWORD: toggle
+    volumes:
+      - app-db-data:/var/lib/postgresql/data
+      - ./flag-service-main/db/init.sql:/docker-entrypoint-initdb.d/01-flags.sql:ro
+      - ./targeting-service-main/db/init.sql:/docker-entrypoint-initdb.d/02-targeting.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U toggle -d togglemaster"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    command: -jar DynamoDBLocal.jar -sharedDb -dbPath /home/dynamodblocal/data
+    user: root
+    volumes:
+      - dynamodb-data:/home/dynamodblocal/data
+    ports:
+      - "8000:8000"
+
+  auth-service:
+    build: ./auth-service-main
+    environment:
+      PORT: "8001"
+      DATABASE_URL: postgres://toggle:toggle@auth-db:5432/auth?sslmode=disable
+      MASTER_KEY: local-master-key
+    depends_on:
+      auth-db:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+
+  flag-service:
+    build: ./flag-service-main
+    environment:
+      PORT: "8002"
+      DATABASE_URL: postgres://toggle:toggle@app-db:5432/togglemaster
+      AUTH_SERVICE_URL: http://auth-service:8001
+    depends_on:
+      app-db:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+    ports:
+      - "8002:8002"
+
+  targeting-service:
+    build: ./targeting-service-main
+    environment:
+      PORT: "8003"
+      DATABASE_URL: postgres://toggle:toggle@app-db:5432/togglemaster
+      AUTH_SERVICE_URL: http://auth-service:8001
+    depends_on:
+      app-db:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+    ports:
+      - "8003:8003"
+
+  evaluation-service:
+    build: ./evaluation-service-main
+    environment:
+      PORT: "8004"
+      REDIS_URL: redis://redis:6379
+      FLAG_SERVICE_URL: http://flag-service:8002
+      TARGETING_SERVICE_URL: http://targeting-service:8003
+      SERVICE_API_KEY: local-service-key
+    depends_on:
+      redis:
+        condition: service_healthy
+      flag-service:
+        condition: service_started
+      targeting-service:
+        condition: service_started
+    ports:
+      - "8004:8004"
+
+  analytics-service:
+    build: ./analytics-service-main
+    environment:
+      PORT: "8005"
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      AWS_SQS_URL: http://localhost:4566/000000000000/toggle-events
+      AWS_DYNAMODB_TABLE: ToggleMasterAnalytics
+      AWS_ENDPOINT_URL: http://dynamodb-local:8000
+    depends_on:
+      dynamodb-local:
+        condition: service_started
+    ports:
+      - "8005:8005"
+
+volumes:
+  auth-db-data:
+  app-db-data:
+  redis-data:
+  dynamodb-data:
