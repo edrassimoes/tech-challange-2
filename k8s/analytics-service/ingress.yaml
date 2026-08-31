@@ -1,8 +1,8 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: targeting-service
-  namespace: targeting
+  name: analytics-service
+  namespace: analytics
   annotations:
     nginx.ingress.kubernetes.io/use-regex: "true"
     nginx.ingress.kubernetes.io/rewrite-target: /$2
@@ -11,10 +11,10 @@ spec:
   rules:
     - http:
         paths:
-          - path: /targeting(/|$)(.*)
+          - path: /events(/|$)(.*)
             pathType: ImplementationSpecific
             backend:
               service:
-                name: targeting-service
+                name: analytics-service
                 port:
-                  number: 8003
+                  number: 8005
